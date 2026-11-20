@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Bybit HA Doji + EMA20 Scanner</title>
+<style>
+:root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--panel2:#0c1423;--line:#26344b;--muted:#9aabc3;--text:#edf3ff;--green:#00c087;--red:#f6465d;--blue:#69a7ff;--amber:#f6b94b}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b1323,#080d18 45%);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1180px;margin:auto;padding:20px 15px 48px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:18px}
+h1{font-size:clamp(22px,4vw,32px);margin:0 0 5px;letter-spacing:-.7px}.sub{color:var(--muted);font-size:13px}
+.pill{border:1px solid #285b4c;color:#6ce0b3;background:#0b2b25;padding:5px 9px;border-radius:30px;font-size:12px;white-space:nowrap}
+.panel{background:rgba(17,26,43,.94);border:1px solid var(--line);border-radius:16px;padding:16px;margin:13px 0;box-shadow:0 10px 30px #0002}
+.controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+input,select,button{font:inherit}input,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px;color:var(--text);min-height:42px}
+button{border:0;border-radius:11px;padding:12px 16px;background:var(--blue);color:#07101f;font-weight:750;cursor:pointer;min-height:44px}
+button:disabled{opacity:.55;cursor:wait}.actions{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+.secondary{background:#24334b;color:var(--text)}.status{color:var(--muted);font-size:13px;min-height:22px}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.metric{background:var(--panel2);padding:12px;border-radius:12px;border:1px solid var(--line)}.metric b{display:block;font-size:19px;margin-top:3px;overflow-wrap:anywhere}.metric span{color:var(--muted);font-size:12px}
+.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:850px;font-size:13px}th,td{text-align:right;padding:11px 9px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}th:first-child,td:first-child{text-align:left}
+.long{color:var(--green);font-weight:800}.short{color:var(--red);font-weight:800}.empty{color:var(--muted);text-align:center;padding:30px 10px}
+.chartbox{width:100%;height:390px;background:#090f1b;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+canvas{width:100%;height:100%;display:block}
+.small{font-size:12px;color:var(--muted)}.note{font-size:13px;color:#bdc9dc}.note li{margin:6px 0}
+.signalhead{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:12px}
+a{color:var(--blue)}.hidden{display:none!important}
+@media(max-width:760px){.controls{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(2,1fr)}.wrap{padding:16px 11px 35px}.panel{padding:13px}.chartbox{height:320px}}
+@media(max-width:390px){.controls{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+ <div><h1>Bybit HA Doji + EMA20 Scanner</h1><div class="sub">USDT 무기한 · 15분봉 · 하이킨아시 도지 패턴 + EMA20 눌림목 패턴</div></div>
+ <span class="pill">READ-ONLY · 주문 기능 없음</span>
+</header>
+
+<section class="panel">
+ <div class="controls">
+  <div><label for="limit">검색 종목 수 (거래대금 상위)</label><select id="limit"><option>50</option><option selected>100</option><option>150</option><option>200</option><option>300</option><option>500</option></select></div>
+  <div><label for="doji">도지 몸통 최대 비율 (%)</label><input id="doji" type="number" min="1" max="30" step=".5" value="10"></div>
+  <div><label for="wick">무꼬리 허용 오차 (%)</label><input id="wick" type="number" min="0" max="5" step=".1" value="0.5"></div>
+  <div><label for="turnover">24시간 거래대금 최소 (USDT)</label><input id="turnover" type="number" min="0" step="100000" value="1000000"></div>
+ </div>
+ <div class="actions"><button id="scanBtn">지금 스캔</button><button class="secondary" id="autoBtn">자동 감시 시작</button><button class="secondary" id="clearBtn">결과 지우기</button><span class="status" id="status">도지 패턴과 큰 상승 후 EMA20 눌림목/하향 이탈 패턴을 검색합니다.</span></div>
+</section>
+
+<section class="panel">
+ <div class="signalhead"><h2 style="font-size:18px;margin:0">검색 결과</h2><span class="small" id="count">0개 신호</span></div>
+ <div class="tablewrap">
+ <table><thead><tr><th>종목</th><th>방향</th><th>신호 유형</th><th>진입 참고가</th><th>손절 기준가</th><th>손절 거리</th><th>계산 레버리지</th><th>거래소 제한 반영</th><th>예상 증거금 손실</th><th>신호 포착 시각 (KST)</th></tr></thead><tbody id="results"><tr><td colspan="10" class="empty">아직 검색 결과가 없습니다.</td></tr></tbody></table>
+ </div>
+</section>
+
+<section class="panel hidden" id="detail">
+ <div class="signalhead"><h2 id="chartTitle" style="font-size:18px;margin:0">차트</h2><span class="small" id="chartTime"></span></div>
+ <div class="metrics">
+  <div class="metric"><span>진입 참고가 (현재 거래소 가격)</span><b id="entryVal">-</b></div>
+  <div class="metric"><span>손절 기준가 (HA 고가/저가)</span><b id="stopVal">-</b></div>
+  <div class="metric"><span>손절 거리</span><b id="distVal">-</b></div>
+  <div class="metric"><span>계산 레버리지</span><b id="levVal">-</b></div>
+  <div class="metric"><span>거래소 최대 레버리지</span><b id="maxLevVal">-</b></div>
+  <div class="metric"><span>적용 레버리지 / 예상 손실</span><b id="appliedVal">-</b></div>
+ </div>
+ <p class="small">아래 차트는 하이킨아시 캔들과 EMA20입니다. 보라색 선은 EMA20, 파란 점선은 진입 참고가, 노란 점선은 손절 기준가입니다.</p>
+ <div class="chartbox"><canvas id="chart"></canvas></div>
+</section>
+
+<section class="panel">
+ <h2 style="font-size:17px;margin:0 0 8px">패턴 판정 및 계산 기준</h2>
+ <ul class="note">
+  <li><b>도지:</b> 직전 확정 하이킨아시 캔들의 몸통 ÷ 전체 고저폭이 설정 비율 이하.</li>
+  <li><b>도지 롱:</b> 도지 전 하락 추세(직전 하락 또는 하락 후 횡보)가 확인되고, 도지 다음 캔들이 양봉이며 밑꼬리가 허용 오차 이내.</li>
+  <li><b>도지 숏:</b> 도지 전 상승 추세(직전 상승 또는 상승 후 횡보)가 확인되고, 도지 다음 캔들이 음봉이며 윗꼬리가 허용 오차 이내.</li>
+  <li><b>EMA20 롱(돌파 필수):</b> 큰 상승 뒤 최대 40개 봉 이내의 눌림이 나오고, 현재 양봉 몸통이 EMA20을 아래에서 위로 실제 통과해야 합니다. 양봉 몸통의 절반 이상이 EMA20 위에 있어야 합니다.</li>
+  <li><b>EMA20 숏(돌파 필수):</b> 큰 상승 뒤 최대 40개 봉 이내의 눌림이 나오고, 현재 음봉 몸통이 EMA20을 위에서 아래로 실제 통과해야 합니다. 음봉 몸통의 절반 이상이 EMA20 아래에 있어야 합니다.</li>
+  <li><b>큰 상승·눌림 판정:</b> 최근 최대 60개 확정봉의 저점→고점 상승폭이 평균 캔들 폭의 3배 이상이어야 하며, 고점 이후 최대 40개 봉 안에 하락 조정이 있어야 합니다.</li>
+  <li><b>추세 판정:</b> 하이킨아시 직전 캔들 4개 중 최소 3개가 같은 방향이고 순이동이 확인되면 추세로 판정. 그 앞에 추세 4개와 좁은 횡보 3개가 이어진 경우도 인정.</li>
+  <li><b>도지 신호:</b> EMA20 돌파 조건과 무관하게 기존 도지 조건만으로 검색합니다.</li>
+  <li><b>EMA20:</b> 15분 하이킨아시 종가로 계산한 지수이동평균 20. 진행 중인 현재 캔들도 감시하며 캔들 마감 전 신호가 바뀔 수 있음.</li>
+  <li><b>레버리지:</b> 0.30 ÷ (진입 참고가와 손절 기준가 사이의 비율). 거래소 최대 레버리지를 넘으면 최대치로 제한.</li>
+ </ul>
+ <p class="note"><b>중요:</b> 마감 1분 전 제한 없이 현재 진행 중인 15분봉을 계속 검사합니다. 따라서 도지 확인 캔들과 EMA20 돌파 신호 모두 <b>잠정 신호</b>이며, 캔들 마감 전 가격 변화로 사라지거나 방향이 바뀔 수 있습니다. EMA20은 하이킨아시 종가 기준입니다. 손절 기준은 신호 캔들의 HA 저가/고가 참고값이고, 진입 참고가는 Bybit 현재 거래 가격입니다. 수수료, 펀딩비, 슬리피지, 급격한 가격 변동으로 실제 손실은 30%와 달라질 수 있습니다. 이 페이지는 공개 시세 조회 전용이며 주문을 실행하지 않습니다.</p>
+</section>
+</div>
+<script>
+const API='https://api.bybit.com';
+const BAR_MS=15*60*1000, SCAN_INTERVAL_MS=10000;
+const $=id=>document.getElementById(id);
+let signals=[], currentSignal=null, chartData=null, autoWatch=false, watchTimer=null, watchSymbols=null, scanning=false;
+async function api(path,params){
+ const u=new URL(API+path); Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,v));
+ const r=await fetch(u.toString()); if(!r.ok) throw new Error('Bybit API HTTP '+r.status);
+ const j=await r.json(); if(j.retCode!==0) throw new Error(j.retMsg||'Bybit API 오류');
+ return j.result;
+}
+const n=v=>Number(v||0);
+function fmt(v){if(!Number.isFinite(v))return '-'; return Number(v).toLocaleString('en-US',{maximumSignificantDigits:9});}
+function kst(ms){return new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(ms));}
+async function getSymbols(){
+ const [tick, inst]=await Promise.all([
+  api('/v5/market/tickers',{category:'linear'}),
+  (async()=>{let list=[],cursor=''; do{let p={category:'linear',limit:1000};if(cursor)p.cursor=cursor;const r=await api('/v5/market/instruments-info',p);list.push(...r.list);cursor=r.nextPageCursor||'';}while(cursor);return list;})()
+ ]);
+ const allowed=new Map(inst.filter(x=>x.status==='Trading'&&x.settleCoin==='USDT'&&x.contractType==='LinearPerpetual').map(x=>[x.symbol,x]));
+ const min=n($('turnover').value), limit=Number($('limit').value);
+ return tick.list.filter(t=>allowed.has(t.symbol)&&n(t.turnover24h)>=min).sort((a,b)=>n(b.turnover24h)-n(a.turnover24h)).slice(0,limit).map(t=>({ticker:t,inst:allowed.get(t.symbol)}));
+}
+async function getCandles(symbol){
+ const r=await api('/v5/market/kline',{category:'linear',symbol,interval:'15',limit:100});
+ const now=Date.now();
+ const raw=r.list.map(x=>({start:n(x[0]),open:n(x[1]),high:n(x[2]),low:n(x[3]),close:n(x[4]),volume:n(x[5])})).sort((a,b)=>a.start-b.start).filter(x=>x.start<=now);
+ let prevO=null,prevC=null;
+ return raw.map(x=>{const c=(x.open+x.high+x.low+x.close)/4;const o=prevO===null?(x.open+x.close)/2:(prevO+prevC)/2;const h=Math.max(x.high,o,c),l=Math.min(x.low,o,c);prevO=o;prevC=c;return {...x,haOpen:o,haClose:c,haHigh:h,haLow:l};});
+}
+function detect(rows,inst,symbol,turnover){
+ if(rows.length<25)return [];
+ const d=rows[rows.length-2],b=rows[rows.length-1];
+ const dr=d.haHigh-d.haLow,br=b.haHigh-b.haLow;
+ const dojiMax=Number($('doji').value)/100,wickTol=Number($('wick').value)/100;
+ const found=[];
+ // 기존 도지 반전 패턴은 유지하되, 마감 1분 전 제한 없이 현재 캔들을 감시
+ if(dr>0&&br>0&&Math.abs(d.haClose-d.haOpen)/dr<=dojiMax){
+  const pre=rows.slice(-10,-2);
+  const rangeOf=a=>Math.max(...a.map(x=>x.haHigh))-Math.min(...a.map(x=>x.haLow));
+  const trend=(a,dir)=>{
+   if(a.length!==4)return false;
+   const count=a.filter(x=>dir==='down'?x.haClose<x.haOpen:x.haClose>x.haOpen).length;
+   const move=dir==='down'?a[0].haOpen-a[a.length-1].haClose:a[a.length-1].haClose-a[0].haOpen;
+   return count>=3&&move>rangeOf(a)*0.18;
+  };
+  const sideways=(a,baseRange)=>{
+   if(a.length!==3||baseRange<=0)return false;
+   const displacement=Math.abs(a[a.length-1].haClose-a[0].haOpen);
+   return rangeOf(a)<=baseRange*0.9&&displacement<=baseRange*0.45;
+  };
+  const directDown=trend(pre.slice(-4),'down'),directUp=trend(pre.slice(-4),'up');
+  const priorTrend=pre.slice(0,4),recentSide=pre.slice(4,7),baseRange=rangeOf(priorTrend);
+  const downThenSide=trend(priorTrend,'down')&&sideways(recentSide,baseRange);
+  const upThenSide=trend(priorTrend,'up')&&sideways(recentSide,baseRange);
+  const downContext=directDown||downThenSide,upContext=directUp||upThenSide;
+  const body=b.haClose-b.haOpen,tol=br*wickTol;
+  const lower=Math.min(b.haOpen,b.haClose)-b.haLow,upper=b.haHigh-Math.max(b.haOpen,b.haClose);
+  let side,stop,pattern;
+  if(body>0&&lower<=tol&&downContext){side='LONG';stop=b.haLow;pattern='도지 반전 · '+(downThenSide&&!directDown?'하락 후 횡보':'하락 추세');}
+  else if(body<0&&upper<=tol&&upContext){side='SHORT';stop=b.haHigh;pattern='도지 반전 · '+(upThenSide&&!directUp?'상승 후 횡보':'상승 추세');}
+  if(side){
+   const entry=b.close,dist=Math.abs(entry-stop)/entry;
+   if(entry&&dist>0){const rawLev=.30/dist,levMax=n(inst.leverageFilter?.maxLeverage)||1,applied=Math.min(rawLev,levMax);
+    found.push({symbol,side,pattern,entry,stop,distPct:dist*100,rawLev,maxLev:levMax,applied,marginLoss:dist*applied*100,signalStart:b.start,turnover,rows,provisional:true,kind:'DOJI'});
+   }
+  }
+ }
+ // EMA20 눌림목 패턴:
+ // 공통 선행 조건은 큰 상승 후 하락 조정이다. 그 다음 양봉이 EMA20을 위로
+ // 돌파하면 LONG, 조정이 깊어져 음봉이 EMA20 아래로 돌파하면 SHORT.
+ // 두 경우 모두 캔들 몸통의 절반 이상이 EMA20 반대편에 위치해야 한다.
+ const closes=rows.map(x=>x.haClose);
+ let ema=null,prevEma=null;
+ const alpha=2/(20+1);
+ for(let i=0;i<closes.length;i++){
+  const next=ema===null?closes[i]:closes[i]*alpha+ema*(1-alpha);
+  if(i===rows.length-2)prevEma=next;
+  ema=next;
+ }
+ const prev=rows[rows.length-2],curr=rows[rows.length-1];
+ const history=rows.slice(0,-1);
+ const avgRange=a=>a.length?a.reduce((sum,x)=>sum+(x.haHigh-x.haLow),0)/a.length:0;
+ const lookback=history.slice(-60);
+ const atr=avgRange(lookback);
+ // 큰 상승: 최근 최대 60개 확정봉에서 저점→고점 상승폭이 평균 캔들폭의 3배 이상.
+ // 고점은 현재 기준 최대 40개 확정봉 이내에 있어야 하며, 고점 이후 하락 조정이 있어야 한다.
+ let peakIndex=-1,peak=-Infinity,trough=Infinity;
+ lookback.forEach((x,i)=>{if(x.haHigh>peak){peak=x.haHigh;peakIndex=i;}});
+ if(peakIndex>=0)trough=Math.min(...lookback.slice(0,peakIndex+1).map(x=>x.haLow));
+ const peakBarsAgo=lookback.length-1-peakIndex;
+ const afterPeak=peakIndex>=0?lookback.slice(peakIndex+1):[];
+ // 눌림은 고점 이후 최대 40개 확정봉까지 인정한다.
+ const largeRise=atr>0&&(peak-trough)>=atr*3&&peakBarsAgo>=1&&peakBarsAgo<=40;
+ const lastConfirmed=history[history.length-1];
+ const pullback=afterPeak.length>=1&&afterPeak.length<=40&&
+   afterPeak.some(x=>x.haClose<x.haOpen)&&
+   lastConfirmed.haClose<peak&&(peak-lastConfirmed.haClose)>=atr*0.4;
+ const setup=largeRise&&pullback;
+ const bodyTop=Math.max(curr.haOpen,curr.haClose),bodyBottom=Math.min(curr.haOpen,curr.haClose);
+ const bodyMid=(bodyTop+bodyBottom)/2;
+ let emaSide=null,emaStop=null,emaPattern='';
+ if(setup&&prevEma!==null){
+  // LONG: 현재 양봉의 몸통 자체가 EMA20을 아래에서 위로 통과해야 한다.
+  // 몸통 중간값도 EMA20 위에 있어야 몸통의 절반 이상이 위쪽에 놓인다.
+  if(curr.haOpen<ema&&curr.haClose>ema&&curr.haClose>curr.haOpen&&bodyMid>=ema){
+   emaSide='LONG';emaStop=curr.haLow;emaPattern='큰 상승 후 하락 조정 · EMA20 상향 재돌파';
+  }
+  // SHORT: 현재 음봉 몸통 자체가 EMA20을 위에서 아래로 실제 통과해야 한다.
+  // 시가는 EMA20 위, 종가는 EMA20 아래이며 몸통 중간값도 EMA20 아래여야 한다.
+  else if(curr.haOpen>ema&&curr.haClose<ema&&curr.haClose<curr.haOpen&&bodyMid<=ema){
+   emaSide='SHORT';emaStop=curr.haHigh;emaPattern='큰 상승 후 하락 조정 · EMA20 하향 이탈';
+  }
+ }
+ if(emaSide){
+  const entry=curr.close,dist=Math.abs(entry-emaStop)/entry;
+  if(entry&&dist>0){const rawLev=.30/dist,levMax=n(inst.leverageFilter?.maxLeverage)||1,applied=Math.min(rawLev,levMax);
+   found.push({symbol,side:emaSide,pattern:emaPattern,entry,stop:emaStop,distPct:dist*100,rawLev,maxLev:levMax,applied,marginLoss:dist*applied*100,signalStart:curr.start,turnover,rows,provisional:true,kind:'EMA20',ema20:ema});
+  }
+ }
+ return found;
+}
+async function pool(items,worker,concurrency,onProgress){
+ let next=0,done=0,out=[];
+ async function run(){while(true){const i=next++;if(i>=items.length)return;try{const v=await worker(items[i]);if(Array.isArray(v))out.push(...v);else if(v)out.push(v);}catch(e){console.warn(items[i]?.ticker?.symbol||'',e);}done++;onProgress(done,items.length);}}
+ await Promise.all(Array.from({length:concurrency},run));return out;
+}
+function render(){
+ const body=$('results');$('count').textContent=signals.length+'개 신호';
+ if(!signals.length){body.innerHTML='<tr><td colspan="10" class="empty">조건에 맞는 종목이 없습니다. 추세·도지·꼬리 조건을 확인해 보세요.</td></tr>';return;}
+ body.innerHTML=signals.map((s,i)=>`<tr data-i="${i}" style="cursor:pointer">
+ <td><b>${s.symbol}</b></td><td class="${s.side==='LONG'?'long':'short'}">${s.side}</td><td>${s.pattern}</td>
+ <td>${fmt(s.entry)}</td><td>${fmt(s.stop)}</td><td>${s.distPct.toFixed(3)}%</td>
+ <td>${s.rawLev.toFixed(2)}x</td><td>${s.applied.toFixed(2)}x</td>
+ <td>${s.marginLoss.toFixed(2)}%</td><td>${kst(s.signalStart)}</td></tr>`).join('');
+ body.querySelectorAll('tr[data-i]').forEach(tr=>tr.addEventListener('click',()=>showDetail(signals[Number(tr.dataset.i)])));
+}
+function showDetail(s){
+ currentSignal=s;chartData=s.rows;$('detail').classList.remove('hidden');
+ $('chartTitle').textContent=s.symbol+' · 15분 하이킨아시 · '+s.pattern+' · '+s.side;
+ $('chartTime').textContent='포착 '+kst(Date.now())+' (한국시간) · 진행 중인 봉 기준 잠정 신호';
+ $('entryVal').textContent=fmt(s.entry);$('stopVal').textContent=fmt(s.stop);
+ $('distVal').textContent=s.distPct.toFixed(3)+'%';$('levVal').textContent=s.rawLev.toFixed(2)+'x';
+ $('maxLevVal').textContent=s.maxLev+'x';
+ $('appliedVal').textContent=s.applied.toFixed(2)+'x / '+s.marginLoss.toFixed(2)+'%';
+ drawChart();$('detail').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function drawChart(){
+ const canvas=$('chart'),rect=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
+ canvas.width=Math.max(1,Math.floor(rect.width*dpr));canvas.height=Math.max(1,Math.floor(rect.height*dpr));
+ const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+ const W=rect.width,H=rect.height,allRows=chartData,rows=allRows.slice(-45);
+ const pad={l:12,r:74,t:15,b:25},cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
+ const min=Math.min(...rows.map(x=>x.haLow),currentSignal.stop),max=Math.max(...rows.map(x=>x.haHigh),currentSignal.entry);
+ const span=max-min||1, y=v=>pad.t+(max-v)/span*ch;
+ ctx.fillStyle='#090f1b';ctx.fillRect(0,0,W,H);
+ ctx.strokeStyle='#1c2a40';ctx.lineWidth=1;
+ for(let i=0;i<5;i++){let yy=pad.t+i*ch/4;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(W-pad.r,yy);ctx.stroke();ctx.fillStyle='#91a1b8';ctx.font='10px sans-serif';ctx.fillText(fmt(max-i*span/4),W-pad.r+5,yy+3);}
+ const step=cw/rows.length,bodyW=Math.max(3,step*.58);
+ rows.forEach((r,i)=>{const x=pad.l+i*step+step/2,up=r.haClose>=r.haOpen,col=up?'#00c087':'#f6465d';
+  ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(x,y(r.haHigh));ctx.lineTo(x,y(r.haLow));ctx.stroke();
+  const top=y(Math.max(r.haOpen,r.haClose)),bot=y(Math.min(r.haOpen,r.haClose));
+  ctx.fillRect(x-bodyW/2,top,bodyW,Math.max(1,bot-top));
+ });
+ // EMA20 overlay, calculated from HA closes across the visible chart history
+ const alpha=2/(20+1);let ema=null;const allEma=[];allRows.forEach(r=>{ema=ema===null?r.haClose:r.haClose*alpha+ema*(1-alpha);allEma.push(ema);});const emaVals=allEma.slice(-rows.length);
+ if(emaVals.length>1){ctx.strokeStyle='#b78cff';ctx.lineWidth=2;ctx.beginPath();emaVals.forEach((v,i)=>{const x=pad.l+i*step+step/2;if(i===0)ctx.moveTo(x,y(v));else ctx.lineTo(x,y(v));});ctx.stroke();}
+ function line(val,color,label){const yy=y(val);ctx.strokeStyle=color;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(W-pad.r,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.font='bold 10px sans-serif';ctx.fillText(label,W-pad.r+4,Math.max(11,Math.min(H-5,yy-4)));}
+ line(currentSignal.entry,'#69a7ff','진입');line(currentSignal.stop,'#f6b94b','손절');
+}
+async function scanUniverse(symbols){
+ if(scanning)return;scanning=true;
+ try{
+  $('status').textContent=`실시간 검색 중 · ${symbols.length}개 종목 검사...`;
+  signals=await pool(symbols,async item=>{const rows=await getCandles(item.ticker.symbol);return detect(rows,item.inst,item.ticker.symbol,n(item.ticker.turnover24h));},4,(done,total)=>{$('status').textContent=`실시간 검색 ${done}/${total} · 신호 ${signals.length}개`});
+  signals.sort((a,b)=>b.signalStart-a.signalStart);render();
+  $('status').textContent=`검색 완료 · 신호 ${signals.length}개 · ${kst(Date.now())} (KST)`;
+ }finally{scanning=false;}
+}
+$('scanBtn').addEventListener('click',async()=>{
+ const btn=$('scanBtn');btn.disabled=true;
+ try{
+  $('status').textContent='Bybit 종목 목록을 불러오는 중...';const symbols=await getSymbols();
+  if(!symbols.length)throw new Error('조건에 맞는 USDT 무기한 종목이 없습니다.');await scanUniverse(symbols);
+ }catch(e){$('status').textContent='오류: '+e.message;console.error(e);}finally{btn.disabled=false;}
+});
+async function autoTick(){
+ if(!autoWatch)return;
+ try{
+  if(!watchSymbols){$('status').textContent='Bybit 종목 목록을 불러오는 중...';watchSymbols=await getSymbols();}
+  await scanUniverse(watchSymbols);
+ }catch(e){$('status').textContent='자동 감시 오류: '+e.message+' · 15초 후 재시도';console.error(e);}
+ if(autoWatch)watchTimer=setTimeout(autoTick,SCAN_INTERVAL_MS);
+}
+$('autoBtn').addEventListener('click',()=>{
+ if(autoWatch){autoWatch=false;if(watchTimer)clearTimeout(watchTimer);$('autoBtn').textContent='자동 감시 시작';$('status').textContent='자동 감시를 중지했습니다.';}
+ else{autoWatch=true;watchSymbols=null;$('autoBtn').textContent='자동 감시 중지';autoTick();}
+});
+$('clearBtn').addEventListener('click',()=>{signals=[];render();$('detail').classList.add('hidden');$('status').textContent='결과를 지웠습니다.';});
+window.addEventListener('resize',()=>{if(currentSignal&&chartData)drawChart();});
+</script>
+</body>
+</html>
